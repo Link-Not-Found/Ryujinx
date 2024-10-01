@@ -18,6 +18,7 @@ using System.Collections.Specialized;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using LazyFile = Ryujinx.HLE.HOS.Services.Fs.FileSystemProxy.LazyFile;
 using Path = System.IO.Path;
 
 namespace Ryujinx.HLE.HOS
@@ -172,36 +173,16 @@ namespace Ryujinx.HLE.HOS
 
                 if (StrEquals(RomfsDir, modDir.Name))
                 {
-                    bool enabled;
-
-                    try
-                    {
-                        var modData = modMetadata.Mods.Find(x => modDir.FullName.Contains(x.Path));
-                        enabled = modData.Enabled;
-                    }
-                    catch
-                    {
-                        // Mod is not in the list yet. New mods should be enabled by default.
-                        enabled = true;
-                    }
+                    var modData = modMetadata.Mods.Find(x => modDir.FullName.Contains(x.Path));
+                    var enabled = modData?.Enabled ?? true;
 
                     mods.RomfsDirs.Add(mod = new Mod<DirectoryInfo>(dir.Name, modDir, enabled));
                     types.Append('R');
                 }
                 else if (StrEquals(ExefsDir, modDir.Name))
                 {
-                    bool enabled;
-
-                    try
-                    {
-                        var modData = modMetadata.Mods.Find(x => modDir.FullName.Contains(x.Path));
-                        enabled = modData.Enabled;
-                    }
-                    catch
-                    {
-                        // Mod is not in the list yet. New mods should be enabled by default.
-                        enabled = true;
-                    }
+                    var modData = modMetadata.Mods.Find(x => modDir.FullName.Contains(x.Path));
+                    var enabled = modData?.Enabled ?? true;
 
                     mods.ExefsDirs.Add(mod = new Mod<DirectoryInfo>(dir.Name, modDir, enabled));
                     types.Append('E');
@@ -217,7 +198,7 @@ namespace Ryujinx.HLE.HOS
 
                 if (types.Length > 0)
                 {
-                    Logger.Info?.Print(LogClass.ModLoader, $"Found mod '{mod.Name}' [{types}]");
+                    Logger.Info?.Print(LogClass.ModLoader, $"Found {(mod.Enabled ? "enabled" : "disabled")} mod '{mod.Name}' [{types}]");
                 }
             }
         }
@@ -512,7 +493,7 @@ namespace Ryujinx.HLE.HOS
 
                 using (IFileSystem fs = new LocalFileSystem(mod.Path.FullName))
                 {
-                    AddFiles(fs, mod.Name, fileSet, builder);
+                    AddFiles(fs, mod.Name, mod.Path.FullName, fileSet, builder);
                 }
                 count++;
             }
@@ -528,7 +509,7 @@ namespace Ryujinx.HLE.HOS
                 Logger.Info?.Print(LogClass.ModLoader, $"Found 'romfs.bin' for Application {applicationId:X16}");
                 using (IFileSystem fs = new RomFsFileSystem(mod.Path.OpenRead().AsStorage()))
                 {
-                    AddFiles(fs, mod.Name, fileSet, builder);
+                    AddFiles(fs, mod.Name, mod.Path.FullName, fileSet, builder);
                 }
                 count++;
             }
@@ -561,18 +542,18 @@ namespace Ryujinx.HLE.HOS
             return newStorage;
         }
 
-        private static void AddFiles(IFileSystem fs, string modName, ISet<string> fileSet, RomFsBuilder builder)
+        private static void AddFiles(IFileSystem fs, string modName, string rootPath, ISet<string> fileSet, RomFsBuilder builder)
         {
             foreach (var entry in fs.EnumerateEntries()
+                                    .AsParallel()
                                     .Where(f => f.Type == DirectoryEntryType.File)
                                     .OrderBy(f => f.FullPath, StringComparer.Ordinal))
             {
-                using var file = new UniqueRef<IFile>();
+                var file = new LazyFile(entry.FullPath, rootPath, fs);
 
-                fs.OpenFile(ref file.Ref, entry.FullPath.ToU8Span(), OpenMode.Read).ThrowIfFailure();
                 if (fileSet.Add(entry.FullPath))
                 {
-                    builder.AddFile(entry.FullPath, file.Release());
+                    builder.AddFile(entry.FullPath, file);
                 }
                 else
                 {

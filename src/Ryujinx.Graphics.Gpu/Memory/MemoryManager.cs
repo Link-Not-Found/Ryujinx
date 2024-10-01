@@ -1,3 +1,5 @@
+using Ryujinx.Common.Memory;
+using Ryujinx.Graphics.Gpu.Image;
 using Ryujinx.Memory;
 using Ryujinx.Memory.Range;
 using System;
@@ -40,9 +42,9 @@ namespace Ryujinx.Graphics.Gpu.Memory
         internal PhysicalMemory Physical { get; }
 
         /// <summary>
-        /// Virtual buffer cache.
+        /// Virtual range cache.
         /// </summary>
-        internal VirtualBufferCache VirtualBufferCache { get; }
+        internal VirtualRangeCache VirtualRangeCache { get; }
 
         /// <summary>
         /// Cache of GPU counters.
@@ -56,13 +58,14 @@ namespace Ryujinx.Graphics.Gpu.Memory
         internal MemoryManager(PhysicalMemory physicalMemory)
         {
             Physical = physicalMemory;
-            VirtualBufferCache = new VirtualBufferCache(this);
+            VirtualRangeCache = new VirtualRangeCache(this);
             CounterCache = new CounterCache();
             _pageTable = new ulong[PtLvl0Size][];
             MemoryUnmapped += Physical.TextureCache.MemoryUnmappedHandler;
             MemoryUnmapped += Physical.BufferCache.MemoryUnmappedHandler;
-            MemoryUnmapped += VirtualBufferCache.MemoryUnmappedHandler;
+            MemoryUnmapped += VirtualRangeCache.MemoryUnmappedHandler;
             MemoryUnmapped += CounterCache.MemoryUnmappedHandler;
+            Physical.TextureCache.Initialize();
         }
 
         /// <summary>
@@ -240,11 +243,11 @@ namespace Ryujinx.Graphics.Gpu.Memory
             }
             else
             {
-                Memory<byte> memory = new byte[size];
+                MemoryOwner<byte> memoryOwner = MemoryOwner<byte>.Rent(size);
 
-                GetSpan(va, size).CopyTo(memory.Span);
+                ReadImpl(va, memoryOwner.Span, tracked);
 
-                return new WritableRegion(this, va, memory, tracked);
+                return new WritableRegion(this, va, memoryOwner, tracked);
             }
         }
 
